@@ -1,15 +1,41 @@
-from concurrent.futures import ProcessPoolExecutor
 import edax
+import multiprocessing as mp
+from functools import partial
 
 if __name__ == '__main__':
     Edax = edax.start_edax()
 
+def parallel_look_ahead(board_state, search_depth, player_color, is_maximizing):
+    possible_moves = get_valid_moves(
+        board_state, player_color if is_maximizing else -player_color)
+    
+    if not possible_moves or search_depth == 0:
+        return evaluate_position(board_state, player_color)
+        
+    with mp.Pool() as pool:
+        evaluate_branch = partial(
+            evaluate_branch_move,
+            board_state=board_state,
+            search_depth=search_depth,
+            player_color=player_color,
+            is_maximizing=is_maximizing
+        )
+        scores = pool.map(evaluate_branch, possible_moves)
+        
+    return max(scores) if is_maximizing else min(scores)
+
+def evaluate_branch_move(move, board_state, search_depth, player_color, is_maximizing):
+    row, col = move
+    future_board = [row[:] for row in board_state]
+    make_move(future_board, row, col, player_color if is_maximizing else -player_color)
+    return look_ahead(future_board, search_depth-1, float('-inf'),
+                     float('inf'), not is_maximizing, player_color)
+
 def create_board():
     board = [[0 for _ in range(8)] for _ in range(8)]
-    board[3][3] = board[4][4] = -1  # White pieces
-    board[3][4] = board[4][3] = 1   # Black pieces
+    board[3][3] = board[4][4] = -1  
+    board[3][4] = board[4][3] = 1   
     return board
-
 
 def print_board(board):
     print("  0 1 2 3 4 5 6 7")
@@ -23,152 +49,6 @@ def print_board(board):
             else:
                 print(".", end=" ")
         print()
-
-
-def look_ahead(board_state, search_depth, alpha, beta, is_maximizing, player_color):
-    if search_depth == 0:
-        return evaluate_position(board_state, player_color)
-
-    possible_moves,move_dirs = get_valid_moves(
-        board_state, player_color if is_maximizing else -player_color)
-
-    if not possible_moves:
-        return evaluate_position(board_state, player_color)
-
-    if is_maximizing:
-        best_score = float('-inf')
-        for i in range(len(possible_moves)):
-            row,col = possible_moves[i]
-            dire = move_dirs[i]
-            future_board = [row[:] for row in board_state]
-            make_move(future_board, row, col, dire, player_color)
-
-            score = look_ahead(future_board, search_depth-1,
-                               alpha, beta, False, player_color)
-            best_score = max(best_score, score)
-            alpha = max(alpha, score)
-            if beta <= alpha:
-                break
-        return best_score
-    else:
-        worst_score = float('inf')
-        for i in range(len(possible_moves)):
-            row,col = possible_moves[i]
-            dire = move_dirs[i]
-            future_board = [row[:] for row in board_state]
-            make_move(future_board, row, col, dire, -player_color)
-
-            score = look_ahead(future_board, search_depth-1,
-                               alpha, beta, True, player_color)
-            worst_score = min(worst_score, score)
-            beta = min(beta, score)
-            if beta <= alpha:
-                break
-        return worst_score
-
-def evaluate_move(index, possible_moves, move_dirs, board_state, search_depth, player_color):
-    row, col = possible_moves[index]
-    dire = move_dirs[index]
-    future_board = [row[:] for row in board_state]
-    make_move(future_board, row, col, dire, player_color)
-
-    return (
-        row,
-        col,
-        parallel_look_ahead(
-            future_board,
-            search_depth - 1,
-            float('-inf'),
-            float('inf'),
-            False,
-            player_color
-        )
-    )
-
-
-def parallel_look_ahead(board_state, search_depth, alpha, beta, is_maximizing, player_color):
-    if search_depth == 0:
-        return evaluate_position(board_state, player_color)
-
-    possible_moves, move_dirs = get_valid_moves(
-        board_state, player_color if is_maximizing else -player_color
-    )
-
-    if not possible_moves:
-        return evaluate_position(board_state, player_color)
-
-    def evaluate_future_move(index):
-        row, col = possible_moves[index]
-        dire = move_dirs[index]
-        future_board = [row[:] for row in board_state]
-        make_move(future_board, row, col, dire,
-                  player_color if is_maximizing else -player_color)
-
-        return look_ahead(
-            future_board, 
-            search_depth - 1, 
-            alpha, beta, 
-            not is_maximizing, 
-            player_color
-        )
-
-    if is_maximizing:
-        best_score = float('-inf')
-        with ProcessPoolExecutor() as executor:
-            scores = list(executor.map(evaluate_future_move, range(len(possible_moves))))
-
-        for score in scores:
-            best_score = max(best_score, score)
-            alpha = max(alpha, score)
-            if beta <= alpha:
-                break
-        return best_score
-    else:
-        worst_score = float('inf')
-        with ProcessPoolExecutor() as executor:
-            scores = list(executor.map(evaluate_future_move, range(len(possible_moves))))
-
-        for score in scores:
-            worst_score = min(worst_score, score)
-            beta = min(beta, score)
-            if beta <= alpha:
-                break
-        return worst_score
-
-
-def move(board_state, player_color):
-    possible_moves, move_dirs = get_valid_moves(board_state, player_color)
-
-    if not possible_moves:
-        return None
-
-    best_move = None
-    best_score = float('-inf')
-
-    empty_spaces = sum(row.count(0) for row in board_state)
-    search_depth = 40 if empty_spaces <= 10 else 6
-
-    with ProcessPoolExecutor() as executor:
-        results = list(
-            executor.map(
-                evaluate_move,
-                range(len(possible_moves)),
-                [possible_moves] * len(possible_moves),
-                [move_dirs] * len(possible_moves),
-                [board_state] * len(possible_moves),
-                [search_depth] * len(possible_moves),
-                [player_color] * len(possible_moves),
-            )
-        )
-
-    for row, col, score in results:
-        if score > best_score:
-            best_score = score
-            best_move = (row, col)
-
-    return best_move
-
-
 
 def get_valid_moves(board_state, player_color):
     player_pcs = [
@@ -184,13 +64,11 @@ def get_valid_moves(board_state, player_color):
     ]
 
     valid_moves = []
-    dir_moves = []
 
     for pc in player_pcs:
         for d in dirs:
             new = [pc[0] + d[0], pc[1] + d[1]]
             c = 0
-            # Traverse in the current direction
             while (
                 0 <= new[0] < len(board_state) and
                 0 <= new[1] < len(board_state[0]) and
@@ -199,7 +77,6 @@ def get_valid_moves(board_state, player_color):
                 new = [new[0] + d[0], new[1] + d[1]]
                 c += 1
 
-            # Check if the final square is a valid move
             if (
                 c > 0 and
                 0 <= new[0] < 8 and
@@ -207,25 +84,33 @@ def get_valid_moves(board_state, player_color):
                 board_state[new[0]][new[1]] == 0
             ):
                 valid_moves.append(tuple(new))
-                dir_moves.append(d)
 
-    return valid_moves, dir_moves
+    return valid_moves
 
+def check_direction(board_state, row, col, dx, dy, player_color):
+    x, y = row + dx, col + dy
+    has_opponent_pieces = False
 
-def make_move(board_state, row, col, direction, player_color):
+    while 0 <= x < 8 and 0 <= y < 8:
+        if board_state[x][y] == 0:
+            return False
+        if board_state[x][y] == player_color:
+            return has_opponent_pieces
+        has_opponent_pieces = True
+        x, y = x + dx, y + dy
+    return False
+
+def make_move(board_state, row, col, player_color):
+    directions = [(0, 1), (1, 1), (1, 0), (1, -1),
+                 (0, -1), (-1, -1), (-1, 0), (-1, 1)]
     board_state[row][col] = player_color
 
-    dx, dy = direction
-    x, y = row + dx, col + dy
-    flip_positions = []
-    while 0 <= x < 8 and 0 <= y < 8 and board_state[x][y] == -player_color:
-        flip_positions.append((x, y))
-        x, y = x + dx, y + dy
-    
-    if 0 <= x < 8 and 0 <= y < 8 and board_state[x][y] == player_color:
-        for fx, fy in flip_positions:
-            board_state[fx][fy] = player_color
-
+    for dx, dy in directions:
+        if check_direction(board_state, row, col, dx, dy, player_color):
+            x, y = row + dx, col + dy
+            while board_state[x][y] == -player_color:
+                board_state[x][y] = player_color
+                x, y = x + dx, y + dy
 
 def evaluate_position(board_state, player_color):
     my_pieces = sum([row.count(player_color) for row in board_state])
@@ -234,11 +119,89 @@ def evaluate_position(board_state, player_color):
 
     corner_positions = [(0, 0), (0, 7), (7, 0), (7, 7)]
     corner_score = sum([3 if board_state[x][y] == player_color else -3
-                        for x, y in corner_positions if board_state[x][y] != 0])
+                       for x, y in corner_positions if board_state[x][y] != 0])
+    move_advantage = (
+        len(get_valid_moves(board_state, player_color)) +
+        len(get_valid_moves(board_state, -player_color))
+    )
+    position_advantage = piece_advantage + corner_score
+    advantage = move_advantage + position_advantage
 
-    return piece_advantage + corner_score
+    return advantage
 
+def look_ahead(board_state, search_depth, alpha, beta, is_maximizing, player_color):
+    if search_depth > 4:
+        return parallel_look_ahead(board_state, search_depth, player_color, is_maximizing)
+        
+    if search_depth == 0:
+        return evaluate_position(board_state, player_color)
 
+    possible_moves = get_valid_moves(
+        board_state, player_color if is_maximizing else -player_color)
+
+    if not possible_moves:
+        return evaluate_position(board_state, player_color)
+
+    if is_maximizing:
+        best_score = float('-inf')
+        for row, col in possible_moves:
+            future_board = [row[:] for row in board_state]
+            make_move(future_board, row, col, player_color)
+            score = look_ahead(future_board, search_depthalpha, beta, False, player_color)
+            best_score = max(best_score, score)
+            alpha = max(alpha, score)
+            if beta <= alpha:
+                break
+        return best_score
+    else:
+        worst_score = float('inf')
+        for row, col in possible_moves:
+            future_board = [row[:] for row in board_state]
+            make_move(future_board, row, col, -player_color)
+            score = look_ahead(future_board, search_depth-1,
+                             alpha, beta, True, player_color)
+            worst_score = min(worst_score, score)
+            beta = min(beta, score)
+            if beta <= alpha:
+                break
+        return worst_score
+
+def parallel_evaluate_moves(board_state, possible_moves, search_depth, player_color):
+    with mp.Pool() as pool:
+        evaluate_single_move = partial(
+            evaluate_move,
+            board_state=board_state,
+            search_depth=search_depth,
+            player_color=player_color
+        )
+        results = pool.map(evaluate_single_move, possible_moves)
+    return list(zip(possible_moves, results))
+
+def evaluate_move(move, board_state, search_depth, player_color):
+    row, col = move
+    future_board = [row[:] for row in board_state]
+    make_move(future_board, row, col, player_color)
+    return look_ahead(future_board, search_depth-1, float('-inf'),
+                     float('inf'), False, player_color)
+
+def move(board_state, player_color):
+    possible_moves = get_valid_moves(board_state, player_color)
+
+    if not possible_moves:
+        return None
+
+    empty_spaces = sum(row.count(0) for row in board_state)
+    search_depth = 40 if empty_spaces <= 10 else 6
+
+    move_scores = parallel_evaluate_moves(
+        board_state,
+        possible_moves,
+        search_depth,
+        player_color
+    )
+
+    best_move, _ = max(move_scores, key=lambda x: x[1])
+    return best_move
 
 def player(board_state, player_color):
     valid_moves = get_valid_moves(board_state, player_color)
@@ -246,7 +209,8 @@ def player(board_state, player_color):
 
     print_board(board_state)
     print("\nValid moves:", valid_moves)
-    if not valid_moves : return None
+    if not valid_moves:
+        return None
     while True:
         try:
             x, y = edax.get_move(board_state, player_color, Edax)
@@ -256,7 +220,6 @@ def player(board_state, player_color):
                 print(f"Invalid move. Choose one of {valid_moves}.")
         except ValueError:
             print("Invalid input. Enter numeric coordinates between 0 and 7.")
-
 
 def play_game(bot1, bot2, verbose=True):
     board = create_board()
@@ -294,8 +257,9 @@ def play_game(bot1, bot2, verbose=True):
 
     return black_count, white_count
 
-
 if __name__ == "__main__":
-    # if multiprocessing.get_start_method(allow_none=True) != "fork":
-    #     multiprocessing.set_start_method("fork")
-    play_game(move, player, verbose=True)
+    black_score, white_score = play_game(
+        player,
+        move,
+        verbose=True
+    )

@@ -101,8 +101,14 @@ def evaluate_position(board_state, player_color):
     corner_positions = [(0, 0), (0, 7), (7, 0), (7, 7)]
     corner_score = sum([3 if board_state[x][y] == player_color else -3
                         for x, y in corner_positions if board_state[x][y] != 0])
+    move_advantage = (
+        len(get_valid_moves(board_state, player_color))+ 
+        len(get_valid_moves(board_state , -player_color))
+        )
+    position_advantage = piece_advantage + corner_score
+    advantage = move_advantage + position_advantage
 
-    return piece_advantage + corner_score
+    return advantage
 
 
 def look_ahead(board_state, search_depth, alpha, beta, is_maximizing, player_color):
